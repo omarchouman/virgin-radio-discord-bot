@@ -11,6 +11,7 @@ const {
   createAudioPlayer,
   createAudioResource,
   StreamType,
+  AudioPlayerStatus,
   VoiceConnectionStatus,
   entersState,
   getVoiceConnection,
@@ -55,12 +56,19 @@ function createRadioResource() {
       "-reconnect_delay_max", "5",
       "-i", VIRGIN_RADIO_URL,
       "-analyzeduration", "0",
-      "-loglevel", "0",
+      "-loglevel", "error",
       "-vn",
       "-f", "s16le",
       "-ar", "48000",
       "-ac", "2",
     ],
+  });
+  // Surface FFmpeg failures (bad URL, can't spawn binary, etc.) in the logs.
+  transcoder.process?.stderr?.on("data", (chunk) => {
+    console.error("[ffmpeg]", chunk.toString().trim());
+  });
+  transcoder.on("error", (err) => {
+    console.error("[ffmpeg] transcoder error:", err.message);
   });
   return createAudioResource(transcoder, { inputType: StreamType.Raw });
 }
@@ -86,11 +94,23 @@ async function handlePlay(message) {
     });
 
     await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+    console.log("[voice] connection Ready (signaling OK)");
 
     const player = createAudioPlayer();
     player.on("error", (error) => {
       console.error("Audio player error:", error.message);
     });
+    // Diagnostic: Idle->Buffering->Playing means FFmpeg is producing audio.
+    // Reaching "playing" but with no sound points at UDP being blocked.
+    player.on(AudioPlayerStatus.Buffering, () =>
+      console.log("[player] buffering (FFmpeg starting)")
+    );
+    player.on(AudioPlayerStatus.Playing, () =>
+      console.log("[player] PLAYING (audio is being sent)")
+    );
+    player.on(AudioPlayerStatus.Idle, () =>
+      console.log("[player] idle (no audio / stream ended)")
+    );
 
     player.play(createRadioResource());
     connection.subscribe(player);
