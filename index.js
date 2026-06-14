@@ -15,9 +15,11 @@ const {
   VoiceConnectionStatus,
   entersState,
   getVoiceConnection,
+  generateDependencyReport,
 } = require("@discordjs/voice");
 const { FFmpeg } = require("prism-media");
 const ffmpegPath = require("ffmpeg-static");
+const sodium = require("libsodium-wrappers");
 
 // Point prism-media at the FFmpeg binary bundled by ffmpeg-static so we don't
 // depend on FFmpeg being installed on the host (important for shared hosting).
@@ -91,6 +93,12 @@ async function handlePlay(message) {
       channelId: voiceChannel.id,
       guildId: message.guild.id,
       adapterCreator: message.guild.voiceAdapterCreator,
+    });
+
+    // Log every connection state transition so we can see exactly where it
+    // stalls (e.g. stuck in "connecting" = UDP voice handshake failing).
+    connection.on("stateChange", (oldState, newState) => {
+      console.log(`[voice] ${oldState.status} -> ${newState.status}`);
     });
 
     await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
@@ -178,4 +186,14 @@ http
     console.log(`Keep-alive HTTP server listening on port ${PORT}`);
   });
 
-client.login(TOKEN);
+// Wait for libsodium to finish initializing before logging in, so the voice
+// connection can encrypt audio immediately. Print the dependency report so the
+// logs show which opus/encryption/FFmpeg libraries are actually available.
+(async () => {
+  await sodium.ready;
+  console.log(generateDependencyReport());
+  await client.login(TOKEN);
+})().catch((err) => {
+  console.error("Startup failed:", err);
+  process.exit(1);
+});
